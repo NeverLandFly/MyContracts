@@ -32,7 +32,6 @@ struct client_bet{
     uint64_t pool_id;
     account_name client;
     fixed_point128<4> client_fund;
-
     uint64_t primary_key() const{ return id; }
     
     EOSLIB_SERIALIZE(client_bet,(id)(client)(client_fund))
