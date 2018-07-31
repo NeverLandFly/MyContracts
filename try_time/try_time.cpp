@@ -13,7 +13,7 @@ class try_time : public eosio::contract{
         void show(const std::string& time_str)
         {
             const time_point& current_time = time_point::from_iso_string(time_str);
-            print(current_time.elapsed._count);
+            print(current_time.to_iso_string);
         }
 };
 EOSIO_ABI(try_time, (show))

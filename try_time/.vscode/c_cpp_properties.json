@@ -4,7 +4,8 @@
             "name": "Linux",
             "includePath": [
                 "${workspaceFolder}/**",
-                "~/eos/contracts/"
+                "~/eos/contracts/",
+                "~/eos/libraries/fc/include/"
             ],
             "defines": [],
             "compilerPath": "/usr/bin/clang++-4.0",
