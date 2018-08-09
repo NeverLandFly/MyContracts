@@ -52,19 +52,24 @@ public:
                             bid1key = id;
                     }else{
                         auto current = volume;
-                        while (current > 0 && price >= askitr->price){
+                        while (current > 0 && ask1key != 0 && price >= askitr->price){
                             if (current < askitr->get_unclosed()){
-                                current = 0;
                                 order_book.modify(askitr, _self, [&](auto &o) {
                                     o.closedvolume += current;
+                                current = 0;
                                 });
                                 break;
                             }else{
                                 current -= askitr->get_unclosed();
-                                auto tempitr =askitr;
                                 if (askitr != order_book.end())
-                                    askitr++;
-                                order_book.erase(tempitr);
+                                {
+                                    auto tempitr = askitr++;
+                                    order_book.erase(tempitr);
+                                    ask1key = askitr->id;
+                                } else{
+                                    order_book.erase(askitr);
+                                    ask1key = 0;
+                                }
                             }
                         }
                         if (current > 0)
@@ -86,14 +91,13 @@ public:
             case 2: // sell open
             case 3: // sell close
                 if (biditr != idx.end()){
-                    print("found biditr.");
                     if (price > biditr->price){
                         auto id = addordertobook(o, counter, rcounter);
                         if (price < askitr->price)
                             ask1key = id;
                     }else{
                         auto current = volume;
-                        while (current > 0 && price <= biditr->price){
+                        while (current > 0 && bid1key != 0 && price <= biditr->price){
                             if (current < biditr->get_unclosed()){
                                 idx.modify(biditr, _self, [&](auto &o) {
                                     o.closedvolume += current;
@@ -102,10 +106,15 @@ public:
                                 break;
                             }else{
                                 current -= biditr->get_unclosed();
-                                auto tempitr = biditr;
                                 if (biditr != idx.begin())
-                                    biditr--;
-                                idx.erase(tempitr);
+                                {
+                                    auto tempitr = biditr--;
+                                    idx.erase(tempitr);
+                                    bid1key = biditr->rid;
+                                }else{
+                                    idx.erase(biditr);
+                                    bid1key = 0;
+                                }
                             }
                         }
                         if (current > 0)
