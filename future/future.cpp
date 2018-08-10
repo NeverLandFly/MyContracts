@@ -8,13 +8,15 @@ public:
     future(account_name contract_account)
     :contract(contract_account),
      descriptions(_self, _self),
-     order_book(_self, _self){}
+     order_book(_self, _self),
+     clients(_self, _self){}
 
     contract_description descriptions;
     orders order_book;
+    client_index clients;
 
     //@abi action
-    void info(uint32_t multiple, uint32_t precision,std::string underlying, uint64_t expiration){
+    void info(uint32_t multiple, uint32_t precision,uint32_t leverage, std::string underlying, uint64_t expiration){
         auto itr = descriptions.find( _self );
         if (itr != descriptions.end()){
             descriptions.erase(itr);
@@ -23,6 +25,7 @@ public:
             info.contract_account = _self;
             info.multiple = multiple;
             info.precision = precision;
+            info.leverage = leverage;
             info.underlying = underlying;
             info.expiration = expiration;
         });
@@ -31,11 +34,11 @@ public:
     //@abi action
     void insertorder(account_name owner, uint32_t price, uint32_t volume, uint8_t type) {
         auto o = order{0, 0, price, volume, 0, type, owner};
-        auto itr = descriptions.find(_self);
-        auto ask1key = itr->ask1key;
-        auto bid1key = itr->bid1key;
-        auto counter = itr->counter;
-        auto rcounter = itr->rcounter;
+        auto desc_itr = descriptions.find(_self);
+        auto ask1key = desc_itr->ask1key;
+        auto bid1key = desc_itr->bid1key;
+        auto counter = desc_itr->counter;
+        auto rcounter = desc_itr->rcounter;
 
         auto askitr = order_book.find(ask1key);
         auto idx = order_book.template get_index<N(rid)>();
@@ -47,20 +50,32 @@ public:
             case 1: // buy close
                 if (askitr != order_book.end()){
                     if (price < askitr->price){
-                        auto id = addordertobook(o, counter, rcounter);
-                        if (price > biditr->price)
-                            bid1key = id;
+                        auto rid = addordertobook(o, counter, rcounter,true);
+                        if (biditr != idx.end() && price > biditr->price)
+                            bid1key = rid;
+                        else
+                            bid1key = rid;
+                        updateentrust(owner, volume, type);
                     }else{
                         auto current = volume;
                         while (current > 0 && ask1key != 0 && price >= askitr->price){
                             if (current < askitr->get_unclosed()){
+                                updatedeal(askitr->owner, askitr->price, current, askitr->type,
+                                           desc_itr->precision, desc_itr->multiple);
+                                updatedeal(owner, askitr->price, current, type,
+                                           desc_itr->precision, desc_itr->multiple);
                                 order_book.modify(askitr, _self, [&](auto &o) {
                                     o.closedvolume += current;
                                 current = 0;
                                 });
+
                                 break;
                             }else{
                                 current -= askitr->get_unclosed();
+                                updatedeal(askitr->owner, askitr->price, askitr->get_unclosed(), askitr->type,
+                                           desc_itr->precision, desc_itr->multiple);
+                                updatedeal(owner, askitr->price, askitr->get_unclosed(), type,
+                                           desc_itr->precision, desc_itr->multiple);
                                 if (askitr != order_book.end())
                                 {
                                     auto tempitr = askitr++;
@@ -70,6 +85,7 @@ public:
                                     order_book.erase(askitr);
                                     ask1key = 0;
                                 }
+
                             }
                         }
                         if (current > 0)
@@ -78,6 +94,7 @@ public:
                             o.closedvolume = volume - current;
                             auto rid = addordertobook(o, counter, rcounter, true);
                             bid1key = rid;
+                            updateentrust(owner, volume, type);
                         }
                     }
                 }else{
@@ -86,6 +103,7 @@ public:
                         bid1key = rid;
                     }else if (biditr == idx.end())
                         bid1key = rid;
+                    updateentrust(owner, volume, type);
                 }
                 break;
             case 2: // sell open
@@ -93,12 +111,19 @@ public:
                 if (biditr != idx.end()){
                     if (price > biditr->price){
                         auto id = addordertobook(o, counter, rcounter);
-                        if (price < askitr->price)
+                        if (askitr != order_book.end() && price < askitr->price)
                             ask1key = id;
+                        else
+                            ask1key = id;
+                        updateentrust(owner, volume, type);
                     }else{
                         auto current = volume;
                         while (current > 0 && bid1key != 0 && price <= biditr->price){
                             if (current < biditr->get_unclosed()){
+                                updatedeal(askitr->owner, askitr->price, current, askitr->type,
+                                           desc_itr->precision, desc_itr->multiple);
+                                updatedeal(owner, askitr->price, current, type,
+                                           desc_itr->precision, desc_itr->multiple);
                                 idx.modify(biditr, _self, [&](auto &o) {
                                     o.closedvolume += current;
                                 });
@@ -106,6 +131,10 @@ public:
                                 break;
                             }else{
                                 current -= biditr->get_unclosed();
+                                updatedeal(askitr->owner, askitr->price, askitr->get_unclosed(), askitr->type,
+                                           desc_itr->precision, desc_itr->multiple);
+                                updatedeal(owner, askitr->price, askitr->get_unclosed(), type,
+                                           desc_itr->precision, desc_itr->multiple);
                                 if (biditr != idx.begin())
                                 {
                                     auto tempitr = biditr--;
@@ -123,6 +152,7 @@ public:
                             o.closedvolume = volume - current;
                             auto id = addordertobook(o, counter, rcounter);
                             ask1key = id;
+                            updateentrust(owner, volume, type);
                         }
                     }
                 }else{
@@ -131,10 +161,11 @@ public:
                         ask1key = id;
                     }else if (askitr == order_book.end())
                         ask1key = id;
+                    updateentrust(owner, volume, type);
                 }
                 break;
         }
-        descriptions.modify(itr, _self, [&](auto &info) {
+        descriptions.modify(desc_itr, _self, [&](auto &info) {
             info.counter++;
             info.rcounter--;
             info.bid1key = bid1key;
@@ -156,25 +187,79 @@ public:
     }
 
     void removeorder(uint64_t orderid){
-        auto itr = order_book.find( orderid );
-        if (itr != order_book.end()){
-            order_book.erase(itr);
+        auto oitr = order_book.find( orderid );
+        if (oitr == order_book.end()) return;
+        auto citr = clients.find(oitr->owner);
+        if (citr == clients.end()) {
+            order_book.erase(oitr);
+            return;
+        }
+        if (oitr->type == 0 || oitr->type == 1){
+            clients.modify(citr, _self, [&](auto & client){
+                client.longentrust -= oitr->volume;
+            });
+        }
+
+        if (oitr->type == 2 || oitr->type == 3){
+            clients.modify(citr, _self, [&](auto & client){
+                client.shortentrust -= oitr->volume;
+            });
+        }
+        order_book.erase(oitr);
+    }
+
+private:
+
+    void updateentrust(account_name account, uint32_t volume, uint8_t type){
+        auto itr = clients.find(account);
+        if (itr == clients.end()) return;
+        if (type == 0 || type == 1){
+            clients.modify(itr, _self, [&](auto & client){
+                client.longentrust += volume;
+            });
+        }
+
+        if (type == 2 || type == 3){
+            clients.modify(itr, _self, [&](auto & client){
+                client.shortentrust += volume;
+            });
         }
     }
 
-    void getridindex(){
-        auto idx = order_book.template get_index<N(rid)>();
-        auto biditr = idx.begin();
-        auto enditr = idx.end();
-        auto itr = descriptions.find(_self);
-        auto bid1key = itr->bid1key;
-        auto keyitr = idx.find(bid1key);
-        print("begin: ", biditr->rid, ", end: ", enditr->rid, ", key: ", keyitr->rid,"\n");
-        while (biditr != idx.end()){
-            print("current: ", biditr->rid, "\n");
-            biditr++;
+    void updatedeal(account_name account, uint32_t price, uint32_t volume, uint8_t type,
+            uint32_t precision, uint32_t multiple){
+        auto itr = clients.find(account);
+        if (itr == clients.end()) return;
+        if (type == 0) {
+            clients.modify(itr, _self, [&](auto & client){
+                client.longprice = (client.longprice * client.longpos + price * volume)/(client.longpos + volume);
+                client.longpos += volume;
+            });
+        }
+
+        if (type == 1) {
+            clients.modify(itr, _self, [&](auto & client){
+                client.balance.amount += (client.shortprice - price) * volume * multiple / precision;
+                client.shortprice = (client.shortprice * client.shortpos - price * volume)/(client.shortpos - volume);
+                client.shortpos -= volume;
+            });
+        }
+
+        if (type == 2) {
+            clients.modify(itr, _self, [&](auto & client){
+                client.shortprice = (client.shortprice * client.shortpos + price * volume)/(client.shortpos + volume);
+                client.shortpos += volume;
+            });
+        }
+
+        if (type == 3) {
+            clients.modify(itr, _self, [&](auto & client){
+                client.balance.amount += (price - client.longprice) * volume * multiple / precision;
+                client.longprice = (client.longprice * client.longpos - price * volume)/(client.longpos - volume);
+                client.longpos -= volume;
+            });
         }
     }
 };
 
-EOSIO_ABI(future, (info)(insertorder)(removeorder)(getridindex))
+EOSIO_ABI(future, (info)(insertorder)(removeorder))
