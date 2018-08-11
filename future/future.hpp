@@ -9,11 +9,11 @@ using namespace std;
 //@abi table description i64
 struct description {
     account_name contract_account;
+    account_name manager;
     uint32_t multiple;
-    uint32_t precision;
     uint32_t leverage;
     uint32_t counter = 0;
-    uint32_t rcounter = (2<<29) - 1;
+    uint32_t rcounter = (2L<<29) - 1;
     string underlying;
     uint64_t expiration;
     uint64_t ask1key = 0;
@@ -21,7 +21,7 @@ struct description {
     uint32_t lastprice = 0;
 
     auto primary_key() const { return contract_account; }
-    EOSLIB_SERIALIZE(description, (contract_account)(multiple)(precision)(leverage)(counter)(rcounter)(underlying)(expiration)(ask1key)(bid1key)(lastprice))
+    EOSLIB_SERIALIZE(description, (contract_account)(manager)(multiple)(leverage)(counter)(rcounter)(underlying)(expiration)(ask1key)(bid1key)(lastprice))
 };
 
 typedef multi_index<N(description), description> contract_description;
@@ -30,10 +30,10 @@ typedef multi_index<N(description), description> contract_description;
 struct order{
     uint64_t id;
     uint64_t rid;
-    uint32_t price;
+    uint32_t price;//trade price * eos precision(10000)
     uint32_t volume;
     uint32_t closedvolume;
-    uint8_t type;
+    uint8_t type;//0=buy open, 1=buy sell, 2=sell open, 3=sell close
     account_name owner;
 
     auto primary_key() const { return id; }

@@ -11,20 +11,24 @@ public:
      order_book(_self, _self),
      clients(_self, _self){}
 
+    static constexpr uint32_t max_num = (1L << 29) - 1;
     contract_description descriptions;
     orders order_book;
     client_index clients;
 
     //@abi action
-    void info(uint32_t multiple, uint32_t precision,uint32_t leverage, std::string underlying, uint64_t expiration){
+    void info(account_name manager, uint32_t multiple, uint32_t leverage, std::string underlying, uint64_t expiration){
+        require_auth(manager);
+        eosio_assert(multiple<=100,"invalid multiple");
+        eosio_assert(leverage<=100, "invalid leverage");
         auto itr = descriptions.find( _self );
         if (itr != descriptions.end()){
             descriptions.erase(itr);
         }
         auto info = descriptions.emplace(_self, [&](auto& info){
+            info.manager = manager;
             info.contract_account = _self;
             info.multiple = multiple;
-            info.precision = precision;
             info.leverage = leverage;
             info.underlying = underlying;
             info.expiration = expiration;
@@ -33,6 +37,10 @@ public:
 
     //@abi action
     void insertorder(account_name owner, uint32_t price, uint32_t volume, uint8_t type) {
+        require_auth(owner);
+        eosio_assert(is_valid(price), "invalid price");
+        eosio_assert(is_valid(price), "invalid volume");
+        eosio_assert(type>=0 && type<=3, "invalid type");
         auto o = order{0, 0, price, volume, 0, type, owner};
         auto desc_itr = descriptions.find(_self);
         auto ask1key = desc_itr->ask1key;
@@ -61,9 +69,9 @@ public:
                         while (current > 0 && ask1key != 0 && price >= askitr->price){
                             if (current < askitr->get_unclosed()){
                                 updatedeal(askitr->owner, askitr->price, current, askitr->type,
-                                           desc_itr->precision, desc_itr->multiple);
+                                           desc_itr->multiple);
                                 updatedeal(owner, askitr->price, current, type,
-                                           desc_itr->precision, desc_itr->multiple);
+                                           desc_itr->multiple);
                                 order_book.modify(askitr, _self, [&](auto &o) {
                                     o.closedvolume += current;
                                 current = 0;
@@ -73,9 +81,9 @@ public:
                             }else{
                                 current -= askitr->get_unclosed();
                                 updatedeal(askitr->owner, askitr->price, askitr->get_unclosed(), askitr->type,
-                                           desc_itr->precision, desc_itr->multiple);
+                                           desc_itr->multiple);
                                 updatedeal(owner, askitr->price, askitr->get_unclosed(), type,
-                                           desc_itr->precision, desc_itr->multiple);
+                                           desc_itr->multiple);
                                 if (askitr != order_book.end())
                                 {
                                     auto tempitr = askitr++;
@@ -121,9 +129,9 @@ public:
                         while (current > 0 && bid1key != 0 && price <= biditr->price){
                             if (current < biditr->get_unclosed()){
                                 updatedeal(askitr->owner, askitr->price, current, askitr->type,
-                                           desc_itr->precision, desc_itr->multiple);
+                                           desc_itr->multiple);
                                 updatedeal(owner, askitr->price, current, type,
-                                           desc_itr->precision, desc_itr->multiple);
+                                           desc_itr->multiple);
                                 idx.modify(biditr, _self, [&](auto &o) {
                                     o.closedvolume += current;
                                 });
@@ -132,9 +140,9 @@ public:
                             }else{
                                 current -= biditr->get_unclosed();
                                 updatedeal(askitr->owner, askitr->price, askitr->get_unclosed(), askitr->type,
-                                           desc_itr->precision, desc_itr->multiple);
+                                           desc_itr->multiple);
                                 updatedeal(owner, askitr->price, askitr->get_unclosed(), type,
-                                           desc_itr->precision, desc_itr->multiple);
+                                           desc_itr->multiple);
                                 if (biditr != idx.begin())
                                 {
                                     auto tempitr = biditr--;
@@ -173,22 +181,10 @@ public:
         });
     }
 
-    uint64_t addordertobook(order& o, uint32_t counter, uint32_t rcounter, bool retR = false){
-        auto new_order = order_book.emplace(_self, [&](auto& new_order){
-            new_order.id = ((uint64_t)o.price<<32) + counter;
-            new_order.rid = ((uint64_t)o.price<<32) + rcounter;
-            new_order.price = o.price;
-            new_order.volume = o.volume;
-            new_order.closedvolume = o.closedvolume;
-            new_order.type = o.type;
-            new_order.owner = o.owner;
-        });
-        return retR?new_order->rid:new_order->id;
-    }
-
     void removeorder(uint64_t orderid){
         auto oitr = order_book.find( orderid );
-        if (oitr == order_book.end()) return;
+        eosio_assert(oitr == order_book.end(), "order does not exist")
+        require_auth(oitr->owner);
         auto citr = clients.find(oitr->owner);
         if (citr == clients.end()) {
             order_book.erase(oitr);
@@ -210,6 +206,19 @@ public:
 
 private:
 
+    uint64_t addordertobook(order& o, uint32_t counter, uint32_t rcounter, bool retR = false){
+        auto new_order = order_book.emplace(_self, [&](auto& new_order){
+            new_order.id = ((uint64_t)o.price<<32) + counter;
+            new_order.rid = ((uint64_t)o.price<<32) + rcounter;
+            new_order.price = o.price;
+            new_order.volume = o.volume;
+            new_order.closedvolume = o.closedvolume;
+            new_order.type = o.type;
+            new_order.owner = o.owner;
+        });
+        return retR?new_order->rid:new_order->id;
+    }
+
     void updateentrust(account_name account, uint32_t volume, uint8_t type){
         auto itr = clients.find(account);
         if (itr == clients.end()) return;
@@ -226,8 +235,7 @@ private:
         }
     }
 
-    void updatedeal(account_name account, uint32_t price, uint32_t volume, uint8_t type,
-            uint32_t precision, uint32_t multiple){
+    void updatedeal(account_name account, uint32_t price, uint32_t volume, uint8_t type, uint32_t multiple){
         auto itr = clients.find(account);
         if (itr == clients.end()) return;
         if (type == 0) {
@@ -239,7 +247,7 @@ private:
 
         if (type == 1) {
             clients.modify(itr, _self, [&](auto & client){
-                client.balance.amount += (client.shortprice - price) * volume * multiple / precision;
+                client.balance.amount += (client.shortprice - price) * volume * multiple;
                 client.shortprice = (client.shortprice * client.shortpos - price * volume)/(client.shortpos - volume);
                 client.shortpos -= volume;
             });
@@ -254,11 +262,15 @@ private:
 
         if (type == 3) {
             clients.modify(itr, _self, [&](auto & client){
-                client.balance.amount += (price - client.longprice) * volume * multiple / precision;
+                client.balance.amount += (price - client.longprice) * volume * multiple;
                 client.longprice = (client.longprice * client.longpos - price * volume)/(client.longpos - volume);
                 client.longpos -= volume;
             });
         }
+    }
+
+    bool is_valid(uint32_t value){
+        return value < max_num;
     }
 };
 
